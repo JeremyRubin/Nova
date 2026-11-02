@@ -318,7 +318,7 @@ mod tests {
     Base: PrimeFieldBits + Serialize + for<'de> Deserialize<'de>,
   {
     let constants = Sha256ROConstants::default();
-    let values = [Base::from(1), Base::from(2), Base::from(3)];
+    let values = [Base::from(1), -Base::ONE, Base::ROOT_OF_UNITY];
     let mut native = Sha256RO::<Base>::new(constants.clone());
     let mut circuit = Sha256ROCircuit::<Base>::new(constants);
     let mut cs = TestConstraintSystem::<Base>::new();
