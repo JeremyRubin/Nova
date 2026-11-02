@@ -37,6 +37,30 @@ impl ShapePlan {
       c_terms: 0,
     }
   }
+
+  pub(crate) const fn inputs(&self) -> usize {
+    self.inputs
+  }
+
+  pub(crate) const fn auxiliary_variables(&self) -> usize {
+    self.aux
+  }
+
+  pub(crate) const fn constraints(&self) -> usize {
+    self.constraints
+  }
+
+  pub(crate) const fn a_terms(&self) -> usize {
+    self.a_terms
+  }
+
+  pub(crate) const fn b_terms(&self) -> usize {
+    self.b_terms
+  }
+
+  pub(crate) const fn c_terms(&self) -> usize {
+    self.c_terms
+  }
 }
 
 /// Constraint system that retains only exact shape allocation counts.

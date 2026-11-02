@@ -7,7 +7,7 @@ use crate::{
   frontend::{
     r1cs::NovaWitness,
     solver::SatisfyingAssignment,
-    streaming_shape_cs::{ShapePlanCS, StreamingShapeCS},
+    streaming_shape_cs::{ShapePlan, ShapePlanCS, StreamingShapeCS},
     ConstraintSystem, SynthesisError,
   },
   gadgets::utils::{base_as_scalar, scalar_as_base},
@@ -36,6 +36,66 @@ pub mod nifs;
 use circuit::{NovaAugmentedCircuit, NovaAugmentedCircuitInputs};
 use nifs::{NIFSRelaxed, NIFS};
 
+/// Exact allocation metrics for one Nova augmented R1CS circuit.
+///
+/// The public-input count excludes the constraint system's implicit one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct R1CSShapeMetrics {
+  /// Number of R1CS constraints.
+  pub constraints: usize,
+  /// Number of auxiliary R1CS variables.
+  pub variables: usize,
+  /// Number of public inputs, excluding the implicit one.
+  pub public_inputs: usize,
+  /// Number of nonzero entries in the A matrix.
+  pub a_terms: usize,
+  /// Number of nonzero entries in the B matrix.
+  pub b_terms: usize,
+  /// Number of nonzero entries in the C matrix.
+  pub c_terms: usize,
+}
+
+impl R1CSShapeMetrics {
+  fn from_plan(plan: &ShapePlan) -> Result<Self, NovaError> {
+    Ok(Self {
+      constraints: plan.constraints(),
+      variables: plan.auxiliary_variables(),
+      public_inputs: plan
+        .inputs()
+        .checked_sub(1)
+        .ok_or(NovaError::InvalidStepCircuitIO)?,
+      a_terms: plan.a_terms(),
+      b_terms: plan.b_terms(),
+      c_terms: plan.c_terms(),
+    })
+  }
+}
+
+/// Exact primary and secondary augmented-circuit metrics used by setup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublicParamsShapeMetrics {
+  /// Primary augmented-circuit metrics.
+  pub primary: R1CSShapeMetrics,
+  /// Secondary augmented-circuit metrics.
+  pub secondary: R1CSShapeMetrics,
+}
+
+fn plan_augmented_shape<E, EE, C>(
+  is_primary: bool,
+  circuit: &C,
+  ro_consts: ROConstantsCircuit<EE>,
+) -> Result<ShapePlan, NovaError>
+where
+  E: Engine,
+  EE: Engine<Base = E::Scalar>,
+  C: StepCircuit<E::Scalar>,
+{
+  let augmented = NovaAugmentedCircuit::<EE, C>::new(is_primary, None, circuit, ro_consts);
+  let mut counter = ShapePlanCS::<E>::new();
+  let _ = augmented.synthesize(&mut counter)?;
+  Ok(counter.into_plan())
+}
+
 fn synthesize_augmented_shape<E, EE, C>(
   is_primary: bool,
   circuit: &C,
@@ -46,11 +106,8 @@ where
   EE: Engine<Base = E::Scalar>,
   C: StepCircuit<E::Scalar>,
 {
-  let augmented = NovaAugmentedCircuit::<EE, C>::new(is_primary, None, circuit, ro_consts.clone());
-  let mut counter = ShapePlanCS::<E>::new();
-  let _ = augmented.synthesize(&mut counter)?;
-
-  let mut streaming = StreamingShapeCS::<E>::new(counter.into_plan());
+  let plan = plan_augmented_shape::<E, EE, C>(is_primary, circuit, ro_consts.clone())?;
+  let mut streaming = StreamingShapeCS::<E>::new(plan);
   let augmented = NovaAugmentedCircuit::<EE, C>::new(is_primary, None, circuit, ro_consts);
   let _ = augmented.synthesize(&mut streaming)?;
   streaming.into_r1cs_shape()
@@ -98,6 +155,32 @@ where
   E2: Engine<Base = <E1 as Engine>::Scalar>,
   C: StepCircuit<E1::Scalar>,
 {
+  /// Measures the exact augmented R1CS shapes used by [`Self::setup`].
+  ///
+  /// This performs only the first, allocation-counting synthesis pass. It
+  /// does not materialize matrices, generate commitment keys, compute a
+  /// public-parameter digest, or set up a compressing SNARK. As with setup,
+  /// the step circuit must have a deterministic shape without synthesis side
+  /// effects.
+  pub fn shape_metrics(c: &C) -> Result<PublicParamsShapeMetrics, NovaError> {
+    let primary_plan =
+      plan_augmented_shape::<E1, E2, C>(true, c, ROConstantsCircuit::<E2>::default())?;
+    let secondary_circuit = TrivialCircuit::<E2::Scalar>::default();
+    let secondary_plan = plan_augmented_shape::<E2, E1, _>(
+      false,
+      &secondary_circuit,
+      ROConstantsCircuit::<E1>::default(),
+    )?;
+    let metrics = PublicParamsShapeMetrics {
+      primary: R1CSShapeMetrics::from_plan(&primary_plan)?,
+      secondary: R1CSShapeMetrics::from_plan(&secondary_plan)?,
+    };
+    if metrics.primary.public_inputs != 2 || metrics.secondary.public_inputs != 2 {
+      return Err(NovaError::InvalidStepCircuitIO);
+    }
+    Ok(metrics)
+  }
+
   /// Creates a new `PublicParams` for a circuit `C`.
   ///
   /// # Note
@@ -1149,7 +1232,8 @@ mod tests {
     frontend::{num::AllocatedNum, ConstraintSystem, SynthesisError},
     provider::{
       pedersen::CommitmentKeyExtTrait, traits::DlogGroup, Bn256EngineIPA, Bn256EngineKZG,
-      GrumpkinEngine, PallasEngine, Secp256k1Engine, Secq256k1Engine, VestaEngine,
+      GrumpkinEngine, PallasEngine, Secp256k1Engine, Secp256k1Sha256Engine, Secq256k1Engine,
+      Secq256k1Sha256Engine, VestaEngine,
     },
     traits::{circuit::TrivialCircuit, evaluation::EvaluationEngineTrait, snark::default_ck_hint},
   };
@@ -1208,6 +1292,61 @@ mod tests {
     fn output(&self, z: &[F]) -> Vec<F> {
       vec![z[0] * z[0] * z[0] + z[0] + F::from(5u64)]
     }
+  }
+
+  #[derive(Clone, Debug, Default)]
+  struct ThreeInputCircuit<F: PrimeField> {
+    _p: PhantomData<F>,
+  }
+
+  impl<F: PrimeField> StepCircuit<F> for ThreeInputCircuit<F> {
+    fn arity(&self) -> usize {
+      3
+    }
+
+    fn synthesize<CS: ConstraintSystem<F>>(
+      &self,
+      cs: &mut CS,
+      z: &[AllocatedNum<F>],
+    ) -> Result<Vec<AllocatedNum<F>>, SynthesisError> {
+      z.iter()
+        .enumerate()
+        .map(|(index, input)| input.square(cs.namespace(|| format!("square {index}"))))
+        .collect()
+    }
+  }
+
+  fn assert_metrics_match_shape<E: Engine>(metrics: R1CSShapeMetrics, shape: &R1CSShape<E>) {
+    assert_eq!(metrics.constraints, shape.num_cons);
+    assert_eq!(metrics.variables, shape.num_vars);
+    assert_eq!(metrics.public_inputs, shape.num_io);
+    assert_eq!(metrics.a_terms, shape.A.data.len());
+    assert_eq!(metrics.b_terms, shape.B.data.len());
+    assert_eq!(metrics.c_terms, shape.C.data.len());
+  }
+
+  #[test]
+  fn sha256_shape_metrics_match_materialized_setup_shapes() {
+    type E1 = Secq256k1Sha256Engine;
+    type E2 = Secp256k1Sha256Engine;
+
+    let circuit = ThreeInputCircuit::<<E1 as Engine>::Scalar>::default();
+    let metrics = PublicParams::<E1, E2, _>::shape_metrics(&circuit).unwrap();
+
+    let primary =
+      synthesize_augmented_shape::<E1, E2, _>(true, &circuit, ROConstantsCircuit::<E2>::default())
+        .unwrap();
+    assert_metrics_match_shape(metrics.primary, &primary);
+    drop(primary);
+
+    let secondary_circuit = TrivialCircuit::<<E2 as Engine>::Scalar>::default();
+    let secondary = synthesize_augmented_shape::<E2, E1, _>(
+      false,
+      &secondary_circuit,
+      ROConstantsCircuit::<E1>::default(),
+    )
+    .unwrap();
+    assert_metrics_match_shape(metrics.secondary, &secondary);
   }
 
   fn test_pp_digest_with<E1, E2, C>(circuit: &C, expected: &Expect)
