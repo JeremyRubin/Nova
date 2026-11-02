@@ -369,13 +369,37 @@ mod tests {
     },
     gadgets::utils::scalar_as_base,
     provider::{
-      Bn256EngineKZG, GrumpkinEngine, PallasEngine, Secp256k1Engine, Secq256k1Engine, VestaEngine,
+      Bn256EngineKZG, GrumpkinEngine, PallasEngine, Secp256k1Engine, Secp256k1Sha256Engine,
+      Secq256k1Engine, Secq256k1Sha256Engine, VestaEngine,
     },
     r1cs::R1CSShape,
     traits::{circuit::TrivialCircuit, snark::default_ck_hint},
   };
 
   // In the following we use 1 to refer to the primary, and 2 to refer to the secondary circuit
+  fn recursive_circuit_size<E1, E2>() -> ((usize, usize), (usize, usize))
+  where
+    E1: Engine<Base = <E2 as Engine>::Scalar>,
+    E2: Engine<Base = <E1 as Engine>::Scalar>,
+  {
+    let tc1 = TrivialCircuit::default();
+    let circuit1: NovaAugmentedCircuit<'_, E2, TrivialCircuit<<E2 as Engine>::Base>> =
+      NovaAugmentedCircuit::new(true, None, &tc1, ROConstantsCircuit::<E2>::default());
+    let mut cs1: TestShapeCS<E1> = TestShapeCS::new();
+    circuit1.synthesize(&mut cs1).unwrap();
+
+    let tc2 = TrivialCircuit::default();
+    let circuit2: NovaAugmentedCircuit<'_, E1, TrivialCircuit<<E1 as Engine>::Base>> =
+      NovaAugmentedCircuit::new(false, None, &tc2, ROConstantsCircuit::<E1>::default());
+    let mut cs2: TestShapeCS<E2> = TestShapeCS::new();
+    circuit2.synthesize(&mut cs2).unwrap();
+
+    (
+      (cs1.num_constraints(), cs1.num_aux()),
+      (cs2.num_constraints(), cs2.num_aux()),
+    )
+  }
+
   fn test_recursive_circuit_with<E1, E2>(
     num_constraints_primary: usize,
     num_constraints_secondary: usize,
@@ -460,5 +484,21 @@ mod tests {
     test_recursive_circuit_with::<PallasEngine, VestaEngine>(9818, 10349);
     test_recursive_circuit_with::<Bn256EngineKZG, GrumpkinEngine>(9986, 10538);
     test_recursive_circuit_with::<Secp256k1Engine, Secq256k1Engine>(10265, 10961);
+  }
+
+  #[test]
+  fn test_sha256_recursive_circuit_shape() {
+    assert_eq!(
+      recursive_circuit_size::<Secp256k1Sha256Engine, Secq256k1Sha256Engine>(),
+      ((728_452, 727_699), (731_816, 731_053))
+    );
+  }
+
+  /// Exercises commitment-key generation and witnesses for the large SHA-256
+  /// shapes. The test takes about eight minutes on a development workstation.
+  #[test]
+  #[ignore = "requires 700k-generator commitment keys"]
+  fn test_sha256_recursive_circuit_full() {
+    test_recursive_circuit_with::<Secp256k1Sha256Engine, Secq256k1Sha256Engine>(728_452, 731_816);
   }
 }
