@@ -29,6 +29,7 @@ use crate::{
     pedersen::CommitmentEngine as PedersenCommitmentEngine,
     poseidon::{PoseidonRO, PoseidonROCircuit},
     secp_secq::{secp256k1, secq256k1},
+    sha256::{Sha256RO, Sha256ROCircuit},
   },
   traits::Engine,
 };
@@ -92,6 +93,14 @@ pub struct Secp256k1Engine;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Secq256k1Engine;
 
+/// Secp256k1 with the opt-in SHA-256 random oracle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Secp256k1Sha256Engine;
+
+/// Secq256k1 with the opt-in SHA-256 random oracle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Secq256k1Sha256Engine;
+
 impl Engine for Secp256k1Engine {
   type Base = secp256k1::Base;
   type Scalar = secp256k1::Scalar;
@@ -112,6 +121,30 @@ impl Engine for Secq256k1Engine {
   type ROCircuit = PoseidonROCircuit<Self::Base>;
   type RO2 = PoseidonRO<Self::Scalar>;
   type RO2Circuit = PoseidonROCircuit<Self::Scalar>;
+  type TE = Keccak256Transcript<Self>;
+  type CE = PedersenCommitmentEngine<Self>;
+}
+
+impl Engine for Secp256k1Sha256Engine {
+  type Base = secp256k1::Base;
+  type Scalar = secp256k1::Scalar;
+  type GE = secp256k1::Point;
+  type RO = Sha256RO<Self::Base>;
+  type ROCircuit = Sha256ROCircuit<Self::Base>;
+  type RO2 = Sha256RO<Self::Scalar>;
+  type RO2Circuit = Sha256ROCircuit<Self::Scalar>;
+  type TE = Keccak256Transcript<Self>;
+  type CE = PedersenCommitmentEngine<Self>;
+}
+
+impl Engine for Secq256k1Sha256Engine {
+  type Base = secq256k1::Base;
+  type Scalar = secq256k1::Scalar;
+  type GE = secq256k1::Point;
+  type RO = Sha256RO<Self::Base>;
+  type ROCircuit = Sha256ROCircuit<Self::Base>;
+  type RO2 = Sha256RO<Self::Scalar>;
+  type RO2Circuit = Sha256ROCircuit<Self::Scalar>;
   type TE = Keccak256Transcript<Self>;
   type CE = PedersenCommitmentEngine<Self>;
 }
