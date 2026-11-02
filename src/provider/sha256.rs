@@ -348,6 +348,56 @@ mod tests {
 
     assert_eq!(result_second.get_value(), Some(expected_second));
     assert!(cs.is_satisfied());
+
+    let expected_empty = native.squeeze(0, false);
+    let result_empty_bits = circuit
+      .squeeze(cs.namespace(|| "empty squeeze"), 0, false)
+      .unwrap();
+    let result_empty =
+      le_bits_to_num(cs.namespace(|| "pack empty result"), &result_empty_bits).unwrap();
+
+    assert!(result_empty_bits.is_empty());
+    assert_eq!(result_empty.get_value(), Some(expected_empty));
+    assert!(cs.is_satisfied());
+
+    let expected_single = native.squeeze(1, true);
+    let result_single_bits = circuit
+      .squeeze(cs.namespace(|| "single-bit squeeze"), 1, true)
+      .unwrap();
+    let result_single = le_bits_to_num(
+      cs.namespace(|| "pack single-bit result"),
+      &result_single_bits,
+    )
+    .unwrap();
+
+    assert_eq!(result_single.get_value(), Some(expected_single));
+    assert_eq!(expected_single, Base::ONE);
+    assert!(cs.is_satisfied());
+
+    let expected_full = native.squeeze(MAX_CHALLENGE_BITS, false);
+    let result_full_bits = circuit
+      .squeeze(
+        cs.namespace(|| "maximum-width squeeze"),
+        MAX_CHALLENGE_BITS,
+        false,
+      )
+      .unwrap();
+    let result_full = le_bits_to_num(
+      cs.namespace(|| "pack maximum-width result"),
+      &result_full_bits,
+    )
+    .unwrap();
+
+    assert_eq!(result_full.get_value(), Some(expected_full));
+    assert!(cs.is_satisfied());
+
+    let expected_scalar = native.squeeze(challenge_capacity::<Base>(), false);
+    let result_scalar = circuit
+      .squeeze_scalar(cs.namespace(|| "scalar squeeze"))
+      .unwrap();
+
+    assert_eq!(result_scalar.get_value(), Some(expected_scalar));
+    assert!(cs.is_satisfied());
   }
 
   #[test]
