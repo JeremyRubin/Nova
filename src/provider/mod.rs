@@ -12,6 +12,7 @@ pub mod pasta;
 pub mod pedersen;
 pub mod poseidon;
 pub mod secp_secq;
+pub mod sha256;
 pub mod traits;
 
 #[cfg(feature = "blitzar")]
