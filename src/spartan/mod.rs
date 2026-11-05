@@ -525,9 +525,10 @@ pub fn compute_eval_table_sparse<E: Engine>(
 /// Bounds the row variables of A, B, and C and combines their column
 /// evaluations as `A + r * B + r^2 * C`.
 ///
-/// At most two column-sized tables are live: A and B are accumulated in
-/// parallel, B is folded into A, and B's allocation is reused for C. Matrix
-/// entries retain the same accumulation order as
+/// With one Rayon worker, all three matrices accumulate directly into one
+/// table. Parallel execution keeps at most two column-sized tables live: A
+/// and B are accumulated in parallel, B is folded into A, and B's allocation
+/// is reused for C. Matrix entries retain the same accumulation order as
 /// [`compute_eval_table_sparse`].
 pub(crate) fn compute_eval_table_sparse_joint<E: Engine>(
   S: &R1CSShape<E>,
@@ -544,6 +545,24 @@ pub(crate) fn compute_eval_table_sparse_joint<E: Engine>(
     }
   };
   let allocate = || vec![E::Scalar::ZERO; 2 * S.num_vars()];
+
+  if rayon::current_num_threads() == 1 {
+    let mut joint = allocate();
+    accumulate(S.A(), &mut joint);
+
+    let accumulate_weighted =
+      |M: &SparseMatrix<E::Scalar>, weight: E::Scalar, evals: &mut [E::Scalar]| {
+        for (row_idx, ptrs) in M.indptr.windows(2).enumerate() {
+          let weighted_row = weight * rx[row_idx];
+          for (val, col_idx) in M.get_row_unchecked(ptrs.try_into().unwrap()) {
+            evals[*col_idx] += weighted_row * val;
+          }
+        }
+      };
+    accumulate_weighted(S.B(), *r, &mut joint);
+    accumulate_weighted(S.C(), *r * *r, &mut joint);
+    return joint;
+  }
 
   let (mut joint, mut scratch) = rayon::join(
     || {
@@ -582,6 +601,7 @@ mod eval_table_tests {
     r1cs::{R1CSShape, SparseMatrix},
     traits::Engine,
   };
+  use rayon::ThreadPoolBuilder;
 
   type E = PallasEngine;
 
@@ -633,7 +653,15 @@ mod eval_table_tests {
       .map(|((a, b), c)| a + r * b + r * r * c)
       .collect::<Vec<_>>();
 
-    assert_eq!(compute_eval_table_sparse_joint(&shape, &rx, &r), expected);
+    let evaluate = |threads| {
+      ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .expect("thread pool")
+        .install(|| compute_eval_table_sparse_joint(&shape, &rx, &r))
+    };
+    assert_eq!(evaluate(1), expected);
+    assert_eq!(evaluate(2), expected);
   }
 }
 
