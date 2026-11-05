@@ -200,8 +200,13 @@ impl<E: Engine, EE: EvaluationEngineTrait<E>> RelaxedR1CSSNARKTrait<E> for Relax
     transcript.absorb(b"vk", &pk.vk_digest);
     transcript.absorb(b"U", U);
 
-    // compute the full satisfying assignment by concatenating W.W, U.u, and U.X
-    let mut z = [W.W.clone(), vec![U.u], U.X.clone()].concat();
+    // Compute the full satisfying assignment once with its final capacity.
+    // The inner sum-check later pads this same allocation to twice the R1CS
+    // variable count.
+    let mut z = Vec::with_capacity(2 * S.num_vars);
+    z.extend_from_slice(&W.W);
+    z.push(U.u);
+    z.extend_from_slice(&U.X);
 
     let (num_rounds_x, num_rounds_y) = (
       usize::try_from(S.num_cons.ilog2()).unwrap(),
